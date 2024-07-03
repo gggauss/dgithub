@@ -131,7 +131,7 @@ export default {
 		];
 
 		if (conditions.some(condition => condition) && (fakePage === true || hostTop == 'docker')) {
-			console.log(`域名头部: ${hostTop}\nenv.URL: ${(env.URL}\n伪装首页: ${fakePage}`);
+			console.log(`域名头部: ${hostTop}\nenv.URL: ${env.URL}\n伪装首页: ${fakePage}`);
 			if (env.URL302){
 				return Response.redirect(env.URL302, 302);
 			} else if (env.URL){
