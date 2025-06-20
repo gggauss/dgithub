@@ -4,6 +4,10 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const path = url.pathname;
   const search = url.search;
+  if(true) {
+      return new Response("Hello, world!");
+  }
+
   
   // 处理预检请求
   if (request.method === 'OPTIONS') {
