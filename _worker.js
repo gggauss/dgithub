@@ -9,8 +9,6 @@ export async function onRequest(context) {
   if (request.method === 'OPTIONS') {
     return handleCORS();
   }
-
-
   
   // 构建转发到GitHub的URL
   let githubURL;
