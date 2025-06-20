@@ -4,16 +4,18 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const path = url.pathname;
   const search = url.search;
+
+   return new Response(`请求GitHub失败`, { 
+    status: 500,
+    headers: { 'Content-Type': 'text/plain;charset=UTF-8' }
+  });
   
   // 处理预检请求
   if (request.method === 'OPTIONS') {
     return handleCORS();
   }
 
-   return new Response(`请求GitHub失败: ${err.message}`, { 
-      status: 500,
-      headers: { 'Content-Type': 'text/plain;charset=UTF-8' }
-    });
+
   
   // 构建转发到GitHub的URL
   let githubURL;
