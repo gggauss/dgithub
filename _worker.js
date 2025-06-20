@@ -2,7 +2,7 @@
 
 
 // Docker镜像仓库主机地址
-let hub_host = 'registry-1.docker.io'
+let hub_host = 'github.com'
 // Docker认证服务器地址
 const auth_url = 'https://auth.docker.io'
 // 自定义的工作服务器地址
@@ -21,7 +21,7 @@ function routeByHosts(host) {
 		"cloudsmith": "docker.cloudsmith.io",
 		
 		// 测试环境
-		"test": "registry-1.docker.io",
+		"test": "github.com",
 	};
 
 	if (host in routes) return [ routes[host], false ];
