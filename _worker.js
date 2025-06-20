@@ -1,6 +1,3 @@
 export function onRequest(context) {
-  if(true) {
-      return new Response("Hello, world!");
-  }
-
+  return new Response("Hello, world!");
 }
