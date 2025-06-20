@@ -1,133 +1,200 @@
-// 针对Cloudflare Pages的GitHub镜像 - 使用Pages Functions
-export async function onRequest(context) {
-  const request = context.request;
-  const url = new URL(request.url);
-  const path = url.pathname;
-  const search = url.search;
-  
-  // 处理预检请求
-  if (request.method === 'OPTIONS') {
-    return handleCORS();
-  }
-  
-  // 构建转发到GitHub的URL
-  let githubURL;
-  let isHTML = false;
-  let isAPI = false;
-  let isRaw = false;
-  let isAsset = false;
-  
-  // 处理API请求
-  if (path.startsWith('/api/')) {
-    githubURL = `https://api.github.com${path.replace('/api', '')}${search}`;
-    isAPI = true;
-  } 
-  // 处理raw内容请求
-  else if (path.startsWith('/raw/')) {
-    githubURL = `https://raw.githubusercontent.com${path.replace('/raw', '')}${search}`;
-    isRaw = true;
-  }
-  // 处理静态资源请求 (图片, CSS, JS等)
-  else if (/\.(jpg|jpeg|png|gif|svg|css|js|ico|woff|woff2|ttf|eot)$/i.test(path)) {
-    githubURL = `https://github.com${path}${search}`;
-    isAsset = true;
-  }
-  // 处理普通GitHub页面请求
-  else {
-    githubURL = `https://github.com${path}${search}`;
-    isHTML = true;
-  }
-  
-  // 复制原始请求的头部信息
-  let headers = new Headers(request.headers);
-  headers.delete('host');
-  
-  // 添加必要的头部信息以访问GitHub API
-  if (isAPI) {
-    headers.set('Accept', 'application/vnd.github.v3+json');
-    
-    // 如果环境变量中设置了GitHub令牌，使用它
-    const githubToken = context.env.GITHUB_TOKEN;
-    if (githubToken) {
-      headers.set('Authorization', `token ${githubToken}`);
+function logError(request, message) {
+  console.error(
+    `${message}, clientIp: ${request.headers.get(
+      "cf-connecting-ip"
+    )}, user-agent: ${request.headers.get("user-agent")}, url: ${request.url}`
+  );
+}
+
+function createNewRequest(request, url, proxyHostname, originHostname) {
+  const newRequestHeaders = new Headers(request.headers);
+  for (const [key, value] of newRequestHeaders) {
+    if (value.includes(originHostname)) {
+      newRequestHeaders.set(
+        key,
+        value.replace(
+          new RegExp(`(?<!\\.)\\b${originHostname}\\b`, "g"),
+          proxyHostname
+        )
+      );
     }
   }
-  
-  // 创建新的请求
-  let githubRequest = new Request(githubURL, {
+  return new Request(url.toString(), {
     method: request.method,
-    headers: headers,
+    headers: newRequestHeaders,
     body: request.body,
     redirect: 'follow'
   });
-  
-  try {
-    // 获取GitHub的响应
-    let response = await fetch(githubRequest);
-    
-    // 对于HTML内容，需要重写URL
-    if (isHTML && response.headers.get('content-type')?.includes('text/html')) {
-      const text = await response.text();
-      const modifiedText = rewriteGitHubLinks(text, url.origin);
-      
-      // 创建新的响应头
-      let newHeaders = new Headers(response.headers);
-      newHeaders.set('Access-Control-Allow-Origin', '*');
-      
-      return new Response(modifiedText, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: newHeaders
-      });
+}
+
+function setResponseHeaders(
+  originalResponse,
+  proxyHostname,
+  originHostname,
+  DEBUG
+) {
+  const newResponseHeaders = new Headers(originalResponse.headers);
+  for (const [key, value] of newResponseHeaders) {
+    if (value.includes(proxyHostname)) {
+      newResponseHeaders.set(
+        key,
+        value.replace(
+          new RegExp(`(?<!\\.)\\b${proxyHostname}\\b`, "g"),
+          originHostname
+        )
+      );
     }
-    
-    // 创建新的响应头
-    let newHeaders = new Headers(response.headers);
-    newHeaders.set('Access-Control-Allow-Origin', '*');
-    
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: newHeaders
-    });
-  } catch (err) {
-    return new Response(`请求GitHub失败: ${err.message}`, { 
-      status: 500,
-      headers: { 'Content-Type': 'text/plain;charset=UTF-8' }
-    });
+  }
+  if (DEBUG) {
+    newResponseHeaders.delete("content-security-policy");
+  }
+  return newResponseHeaders;
+}
+
+/**
+ * 替换内容
+ * @param originalResponse 响应
+ * @param proxyHostname 代理地址 hostname
+ * @param pathnameRegex 代理地址路径匹配的正则表达式
+ * @param originHostname 替换的字符串
+ * @returns {Promise<*>}
+ */
+async function replaceResponseText(
+  originalResponse,
+  proxyHostname,
+  pathnameRegex,
+  originHostname
+) {
+  let text = await originalResponse.text();
+  if (pathnameRegex) {
+    pathnameRegex = pathnameRegex.replace(/^\^/, "");
+    return text.replace(
+      new RegExp(`((?<!\\.)\\b${proxyHostname}\\b)(${pathnameRegex})`, "g"),
+      `${originHostname}$2`
+    );
+  } else {
+    return text.replace(
+      new RegExp(`(?<!\\.)\\b${proxyHostname}\\b`, "g"),
+      originHostname
+    );
   }
 }
 
-/**
- * 处理CORS预检请求
- */
-function handleCORS() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Max-Age': '86400'
-    }
-  });
+async function nginx() {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>`;
 }
 
-/**
- * 重写HTML中的GitHub链接为代理链接
- * @param {string} html HTML内容
- * @param {string} proxyOrigin 代理的源地址
- * @returns {string} 重写后的HTML
- */
-function rewriteGitHubLinks(html, proxyOrigin) {
-  // 替换绝对链接
-  html = html.replace(/https:\/\/github\.com\//g, `${proxyOrigin}/`);
-  html = html.replace(/https:\/\/api\.github\.com\//g, `${proxyOrigin}/api/`);
-  html = html.replace(/https:\/\/raw\.githubusercontent\.com\//g, `${proxyOrigin}/raw/`);
-  
-  // 替换相对链接
-  html = html.replace(/href="\/([^"]*)"/g, `href="${proxyOrigin}/$1"`);
-  html = html.replace(/src="\/([^"]*)"/g, `src="${proxyOrigin}/$1"`);
-  
-  return html;
-}
+export default {
+  async fetch(request, env, ctx) {
+    try {
+      const {
+        PROXY_HOSTNAME,
+        PROXY_PROTOCOL = "https",
+        PATHNAME_REGEX,
+        UA_WHITELIST_REGEX,
+        UA_BLACKLIST_REGEX,
+        URL302,
+        IP_WHITELIST_REGEX,
+        IP_BLACKLIST_REGEX,
+        REGION_WHITELIST_REGEX,
+        REGION_BLACKLIST_REGEX,
+        DEBUG = false,
+      } = env;
+      const url = new URL(request.url);
+      const originHostname = url.hostname;
+      if (
+        !PROXY_HOSTNAME ||
+        (PATHNAME_REGEX && !new RegExp(PATHNAME_REGEX).test(url.pathname)) ||
+        (UA_WHITELIST_REGEX &&
+          !new RegExp(UA_WHITELIST_REGEX).test(
+            request.headers.get("user-agent").toLowerCase()
+          )) ||
+        (UA_BLACKLIST_REGEX &&
+          new RegExp(UA_BLACKLIST_REGEX).test(
+            request.headers.get("user-agent").toLowerCase()
+          )) ||
+        (IP_WHITELIST_REGEX &&
+          !new RegExp(IP_WHITELIST_REGEX).test(
+            request.headers.get("cf-connecting-ip")
+          )) ||
+        (IP_BLACKLIST_REGEX &&
+          new RegExp(IP_BLACKLIST_REGEX).test(
+            request.headers.get("cf-connecting-ip")
+          )) ||
+        (REGION_WHITELIST_REGEX &&
+          !new RegExp(REGION_WHITELIST_REGEX).test(
+            request.headers.get("cf-ipcountry")
+          )) ||
+        (REGION_BLACKLIST_REGEX &&
+          new RegExp(REGION_BLACKLIST_REGEX).test(
+            request.headers.get("cf-ipcountry")
+          ))
+      ) {
+        logError(request, "Invalid");
+        return URL302
+          ? Response.redirect(URL302, 302)
+          : new Response(await nginx(), {
+              headers: {
+                "Content-Type": "text/html; charset=utf-8",
+              },
+            });
+      }
+      url.host = PROXY_HOSTNAME;
+      url.protocol = PROXY_PROTOCOL;
+      const newRequest = createNewRequest(
+        request,
+        url,
+        PROXY_HOSTNAME,
+        originHostname
+      );
+      const originalResponse = await fetch(newRequest);
+      const newResponseHeaders = setResponseHeaders(
+        originalResponse,
+        PROXY_HOSTNAME,
+        originHostname,
+        DEBUG
+      );
+      const contentType = newResponseHeaders.get("content-type") || "";
+      let body;
+      if (contentType.includes("text/")) {
+        body = await replaceResponseText(
+          originalResponse,
+          PROXY_HOSTNAME,
+          PATHNAME_REGEX,
+          originHostname
+        );
+      } else {
+        body = originalResponse.body;
+      }
+      return new Response(body, {
+        status: originalResponse.status,
+        headers: newResponseHeaders,
+      });
+    } catch (error) {
+      logError(request, `Fetch error: ${error.message}`);
+      return new Response("Internal Server Error", { status: 500 });
+    }
+  },
+};
